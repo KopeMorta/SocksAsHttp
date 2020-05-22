@@ -18,7 +18,7 @@ public class ReadBodyTest extends ChannelDuplexHandler {
 //            final ByteBuf buf = httpContent.content();
 //            byte[] bytes = new byte[buf.readableBytes()];
 //            buf.readBytes(bytes);
-//
+////
 //            System.out.println(new String(bytes, StandardCharsets.UTF_8));
 //        }
 //        super.channelRead(ctx, msg);

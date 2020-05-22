@@ -7,6 +7,7 @@ import io.netty.channel.ChannelInitializer;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
+import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpRequestDecoder;
 import io.netty.handler.proxy.Socks4ProxyHandler;
 
@@ -21,6 +22,7 @@ public class Main {
                     .childHandler(new ChannelInitializer<Channel>() {
                         protected void initChannel(Channel ch) {
                             ch.pipeline().addLast(new HttpRequestDecoder())
+                                    .addLast(new HttpObjectAggregator(1024 * 1024))
                                     .addLast(new HttpServerHandler())
 //                                    .addLast(new ReadBodyTest())
                             ;

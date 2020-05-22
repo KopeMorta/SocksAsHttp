@@ -9,7 +9,11 @@ public class Client {
         Unirest.config()
                 .proxy("localhost", 8080);
 
-        HttpResponse<String> stringHttpResponse = Unirest.get("https://api.ipify.org?format=json").asString();
+        HttpResponse<String> stringHttpResponse = Unirest.post("http://postman-echo.com/post")
+                .header("Content-Type", "application/json")
+                .body("tests")
+                .asString();
+        System.out.println(stringHttpResponse.getStatus() + " " + stringHttpResponse.getStatusText());
         System.out.println(stringHttpResponse.getHeaders().toString());
         System.out.println(stringHttpResponse.getBody());
     }
