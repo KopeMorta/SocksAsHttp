@@ -1,8 +1,6 @@
 package com.kopemorta.socksashttp.httpproxy;
 
 import io.netty.bootstrap.Bootstrap;
-import io.netty.buffer.ByteBuf;
-import io.netty.buffer.Unpooled;
 import io.netty.channel.*;
 import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.codec.http.*;
@@ -10,7 +8,6 @@ import io.netty.util.concurrent.FutureListener;
 import io.netty.util.concurrent.Promise;
 
 import java.net.SocketAddress;
-import java.nio.charset.StandardCharsets;
 import java.util.Optional;
 
 @ChannelHandler.Sharable
@@ -51,35 +48,7 @@ public class HttpServerHandler extends SimpleChannelInboundHandler<FullHttpReque
 
         if (method.equals(HttpMethod.CONNECT)) { // create https tunnel
             final Promise<Channel> promise = ctx.executor().newPromise();
-            promise.addListener(
-                    (FutureListener<Channel>) future -> {
-                        final Channel outboundChannel = future.getNow();
-                        ctx.pipeline().addLast(new HttpResponseEncoder()); // add encoder for send response
-
-                        /* if all ok send Connection Established response,
-                         * remove all redundant handlers
-                         * and add RelayHandler
-                         */
-                        if (future.isSuccess()) {
-                            ChannelFuture responseFuture = ctx.channel().writeAndFlush(
-                                    new DefaultHttpResponse(PROXY_HTTP_VERSION, CONNECTION_ESTABLISHED_RESPONSE_STATUS));
-
-                            responseFuture.addListener((ChannelFutureListener) channelFuture -> {
-                                final ChannelPipeline p = ctx.pipeline();
-                                p.remove(HttpServerHandler.this);
-                                p.remove(HttpRequestDecoder.class);
-                                p.remove(HttpResponseEncoder.class);
-
-                                outboundChannel.pipeline().addLast(new RelayHandler(ctx.channel()));
-                                ctx.pipeline().addLast(new RelayHandler(outboundChannel));
-                            });
-                        } else {
-                            ctx.channel().writeAndFlush(
-                                    new DefaultHttpResponse(PROXY_HTTP_VERSION, HttpResponseStatus.BAD_GATEWAY));
-
-                            ProxyServerUtils.closeOnFlush(ctx.channel());
-                        }
-                    });
+            promise.addListener(Https.createHttpsPromiseListener(ctx, msg.protocolVersion()));
 
             final Channel inboundChannel = ctx.channel();
             final Bootstrap b = new Bootstrap()
@@ -89,7 +58,68 @@ public class HttpServerHandler extends SimpleChannelInboundHandler<FullHttpReque
                     .option(ChannelOption.SO_KEEPALIVE, true)
                     .handler(new DirectClientHandler(promise));
 
-            b.connect(hostSA).addListener((ChannelFutureListener) future -> {
+            b.connect(hostSA).addListener(Https.createHttpsConnectListener(ctx, msg.protocolVersion()));
+        } else {
+            final Promise<Channel> promise = ctx.executor().newPromise();
+            promise.addListener(Http.createHttpPromiseListener(ctx, msg.protocolVersion()));
+
+            final Channel inboundChannel = ctx.channel();
+            final Bootstrap b = new Bootstrap()
+                    .group(inboundChannel.eventLoop())
+                    .channel(NioSocketChannel.class)
+                    .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 10000)
+                    .option(ChannelOption.SO_KEEPALIVE, true)
+                    .handler(new DirectClientHandler(promise));
+
+
+            // increase RefCnt to can read content in listener
+            msg.retain();
+
+            b.connect(hostSA).addListener(Http.createHttpConnectListener(ctx, msg));
+        }
+    }
+
+
+    private static class Https {
+
+        private static FutureListener<Channel> createHttpsPromiseListener(final ChannelHandlerContext ctx,
+                                                                          final HttpVersion requestVersion) {
+
+            return future -> {
+                final Channel outboundChannel = future.getNow();
+                ctx.pipeline().addLast(new HttpResponseEncoder()); // add encoder for send response
+
+                /* if all ok send Connection Established response,
+                 * remove all redundant handlers
+                 * and add RelayHandler
+                 */
+                if (future.isSuccess()) {
+                    ChannelFuture responseFuture = ctx.channel().writeAndFlush(
+                            new DefaultHttpResponse(requestVersion, CONNECTION_ESTABLISHED_RESPONSE_STATUS));
+
+                    responseFuture.addListener((ChannelFutureListener) channelFuture -> {
+                        final ChannelPipeline p = ctx.pipeline();
+                        p.remove(HttpServerHandler.class);
+                        p.remove(HttpRequestDecoder.class);
+                        p.remove(HttpResponseEncoder.class);
+
+                        outboundChannel.pipeline().addLast(new RelayHandler(ctx.channel()));
+                        ctx.pipeline().addLast(new RelayHandler(outboundChannel));
+                    });
+                } else {
+                    ctx.channel().writeAndFlush(
+                            new DefaultHttpResponse(requestVersion, HttpResponseStatus.BAD_GATEWAY));
+
+                    ProxyServerUtils.closeOnFlush(ctx.channel());
+                }
+            };
+        }
+
+
+        private static ChannelFutureListener createHttpsConnectListener(final ChannelHandlerContext ctx,
+                                                                        final HttpVersion requestVersion) {
+
+            return future -> {
                 //noinspection StatementWithEmptyBody
                 if (future.isSuccess()) {
                     // Connection established use handler provided results
@@ -99,67 +129,59 @@ public class HttpServerHandler extends SimpleChannelInboundHandler<FullHttpReque
                     final Throwable cause = future.cause();
                     if (cause instanceof ConnectTimeoutException) {
                         ctx.channel().writeAndFlush(
-                                new DefaultHttpResponse(PROXY_HTTP_VERSION, HttpResponseStatus.GATEWAY_TIMEOUT));
+                                new DefaultHttpResponse(requestVersion, HttpResponseStatus.GATEWAY_TIMEOUT));
                     } else {
                         ctx.channel().writeAndFlush(
-                                new DefaultHttpResponse(PROXY_HTTP_VERSION, HttpResponseStatus.BAD_GATEWAY));
+                                new DefaultHttpResponse(requestVersion, HttpResponseStatus.BAD_GATEWAY));
                     }
 
                     ProxyServerUtils.closeOnFlush(ctx.channel());
                 }
-            });
-        } else {
-            // TODO: default http
+            };
+        }
+    }
 
-            final Promise<Channel> promise = ctx.executor().newPromise();
-            promise.addListener(
-                    (FutureListener<Channel>) future -> {
-                        final Channel outboundChannel = future.getNow();
+    private static class Http {
 
-                        /* if all ok - send input body to out channel
-                         * remove all redundant handlers
-                         * and add RelayHandler
-                         */
-                        if (future.isSuccess()) {
-                            final ChannelPipeline thisPipe = ctx.pipeline();
-                            thisPipe.remove(HttpServerHandler.this);
-                            thisPipe.remove(HttpRequestDecoder.class);
+        private static FutureListener<Channel> createHttpPromiseListener(final ChannelHandlerContext ctx,
+                                                                          final HttpVersion requestVersion) {
+            return future -> {
+                final Channel outboundChannel = future.getNow();
 
-//                            thisPipe.addLast(new BodyToOutChannel(outboundChannel));
-                            outboundChannel.pipeline().addLast(new RelayHandler(ctx.channel()));
-                            thisPipe.addLast(new RelayHandler(outboundChannel));
-                        } else {
-                            ctx.pipeline().addLast(new HttpResponseEncoder()); // add encoder for send response
-                            ctx.channel().writeAndFlush(
-                                    new DefaultHttpResponse(PROXY_HTTP_VERSION, HttpResponseStatus.BAD_GATEWAY));
+                /* if all ok - send input body to out channel
+                 * remove all redundant handlers
+                 * and add RelayHandler
+                 */
+                if (future.isSuccess()) {
+                    final ChannelPipeline thisPipe = ctx.pipeline();
+                    thisPipe.remove(HttpServerHandler.class);
+                    thisPipe.remove(HttpRequestDecoder.class);
 
-                            ProxyServerUtils.closeOnFlush(ctx.channel());
-                        }
-                    });
+                    outboundChannel.pipeline().addLast(new RelayHandler(ctx.channel()));
+                    thisPipe.addLast(new RelayHandler(outboundChannel));
+                } else {
+                    ctx.pipeline().addLast(new HttpResponseEncoder()); // add encoder for send response
+                    ctx.channel().writeAndFlush(
+                            new DefaultHttpResponse(requestVersion, HttpResponseStatus.BAD_GATEWAY));
 
-            final Channel inboundChannel = ctx.channel();
-            final Bootstrap b = new Bootstrap()
-                    .group(inboundChannel.eventLoop())
-                    .channel(NioSocketChannel.class)
-                    .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 10000)
-                    .option(ChannelOption.SO_KEEPALIVE, true)
-                    .handler(new DirectClientHandler(promise));
+                    ProxyServerUtils.closeOnFlush(ctx.channel());
+                }
+            };
+        }
 
-
-
-            final ByteBuf content = msg.retain().content();
-
-            b.connect(hostSA).addListener((ChannelFutureListener) future -> {
+        private static ChannelFutureListener createHttpConnectListener(final ChannelHandlerContext ctx,
+                                                                        final FullHttpRequest msg) {
+            return future -> {
                 if (future.isSuccess()) {
                     final Channel channel = future.channel();
                     channel.pipeline().addLast(new HttpRequestEncoder(), new HttpObjectAggregator(1024 * 1024));
-                    if(content.capacity() > 0) {
+                    if(msg.content().capacity() > 0) {
                         channel.writeAndFlush(
                                 new DefaultFullHttpRequest(
                                         msg.protocolVersion(),
                                         msg.method(),
                                         msg.uri(),
-                                        content,
+                                        msg.content(),
                                         msg.headers(),
                                         msg.trailingHeaders()
                                 )
@@ -178,18 +200,18 @@ public class HttpServerHandler extends SimpleChannelInboundHandler<FullHttpReque
                     final Throwable cause = future.cause();
                     if (cause instanceof ConnectTimeoutException) {
                         ctx.channel().writeAndFlush(
-                                new DefaultHttpResponse(PROXY_HTTP_VERSION, HttpResponseStatus.GATEWAY_TIMEOUT));
+                                new DefaultHttpResponse(msg.protocolVersion(), HttpResponseStatus.GATEWAY_TIMEOUT));
                     } else {
                         ctx.channel().writeAndFlush(
-                                new DefaultHttpResponse(PROXY_HTTP_VERSION, HttpResponseStatus.BAD_GATEWAY));
+                                new DefaultHttpResponse(msg.protocolVersion(), HttpResponseStatus.BAD_GATEWAY));
                     }
 
                     ProxyServerUtils.closeOnFlush(ctx.channel());
                 }
 
-                content.release();
-            });
-
+                // decrease RefCnt after read
+                msg.content().release();
+            };
         }
     }
 }

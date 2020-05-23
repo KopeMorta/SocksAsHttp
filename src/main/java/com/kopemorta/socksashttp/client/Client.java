@@ -11,7 +11,7 @@ public class Client {
 
         HttpResponse<String> stringHttpResponse = Unirest.post("http://postman-echo.com/post")
                 .header("Content-Type", "application/json")
-                .body("tests")
+                .body("test45t3e45t3e45te45te45ts")
                 .asString();
         System.out.println(stringHttpResponse.getStatus() + " " + stringHttpResponse.getStatusText());
         System.out.println(stringHttpResponse.getHeaders().toString());
