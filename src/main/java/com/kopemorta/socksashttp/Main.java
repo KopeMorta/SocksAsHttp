@@ -9,9 +9,11 @@ import io.netty.channel.nio.NioEventLoopGroup;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.codec.http.HttpObjectAggregator;
 import io.netty.handler.codec.http.HttpRequestDecoder;
-import io.netty.handler.proxy.Socks4ProxyHandler;
 
 public class Main {
+
+    private static final int MAX_CONTENT_LEN = 1024 * 1024;
+
     public static void main(String[] args) {
         EventLoopGroup bossGroup = new NioEventLoopGroup(5);
         EventLoopGroup workerGroup = new NioEventLoopGroup(5);
@@ -22,8 +24,8 @@ public class Main {
                     .childHandler(new ChannelInitializer<Channel>() {
                         protected void initChannel(Channel ch) {
                             ch.pipeline().addLast(new HttpRequestDecoder())
-                                    .addLast(new HttpObjectAggregator(1024 * 1024))
-                                    .addLast(new HttpServerHandler())
+                                    .addLast(new HttpObjectAggregator(MAX_CONTENT_LEN))
+                                    .addLast(new HttpServerHandler(MAX_CONTENT_LEN))
 //                                    .addLast(new ReadBodyTest())
                             ;
                         }
