@@ -1,25 +1,37 @@
 package com.kopemorta.socksashttp.httpproxy;
 
+import com.kopemorta.socksashttp.core.BootstrapFactory;
+import com.kopemorta.socksashttp.entities.Socks4Proxy;
+import com.kopemorta.socksashttp.entities.Socks5Proxy;
+import com.kopemorta.socksashttp.entities.SocksProxy;
 import io.netty.bootstrap.Bootstrap;
 import io.netty.channel.*;
-import io.netty.channel.socket.nio.NioSocketChannel;
 import io.netty.handler.codec.http.*;
+import io.netty.handler.proxy.ProxyHandler;
+import io.netty.handler.proxy.Socks4ProxyHandler;
+import io.netty.handler.proxy.Socks5ProxyHandler;
 import io.netty.util.concurrent.FutureListener;
 import io.netty.util.concurrent.Promise;
 
 import java.net.SocketAddress;
 import java.util.Optional;
 
-@ChannelHandler.Sharable
 public class HttpServerHandler extends SimpleChannelInboundHandler<FullHttpRequest> {
 
     private static final HttpResponseStatus CONNECTION_ESTABLISHED_RESPONSE_STATUS =
             new HttpResponseStatus(200, "Connection Established");
 
 
+    private final BootstrapFactory bootstrapFactory;
+    private final SocksProxy socksProxy;
     private final int maxContentLength;
 
-    public HttpServerHandler(int maxContentLength) {
+    public HttpServerHandler(final BootstrapFactory bootstrapFactory,
+                             final SocksProxy socksProxy,
+                             final int maxContentLength) {
+
+        this.bootstrapFactory = bootstrapFactory;
+        this.socksProxy = socksProxy;
         this.maxContentLength = maxContentLength;
     }
 
@@ -32,7 +44,7 @@ public class HttpServerHandler extends SimpleChannelInboundHandler<FullHttpReque
         final boolean ssl = method.equals(HttpMethod.CONNECT);
 
 
-        SocketAddress hostSA; // destination host
+        final SocketAddress hostSA; // destination host
         // if have header HOST - parse this to SocketAddress
         if (headers.contains("host")) {
             final String host = headers.get("host");
@@ -54,19 +66,34 @@ public class HttpServerHandler extends SimpleChannelInboundHandler<FullHttpReque
             }
         }
 
+        final ProxyHandler proxyHandler;
+        if (socksProxy instanceof Socks5Proxy) {
+            proxyHandler = new Socks5ProxyHandler(socksProxy.getProxyAdr());
+        } else if (socksProxy instanceof Socks4Proxy) {
+            proxyHandler = new Socks4ProxyHandler(socksProxy.getProxyAdr());
+        } else {
+            ctx.channel().writeAndFlush(
+                    new DefaultHttpResponse(msg.protocolVersion(), HttpResponseStatus.BAD_GATEWAY));
+
+            ProxyServerUtils.closeOnFlush(ctx.channel());
+            return;
+        }
         // create https tunnel
         //noinspection IfStatementWithIdenticalBranches
         if (ssl) {
             final Promise<Channel> promise = ctx.executor().newPromise();
             promise.addListener(Https.createHttpsPromiseListener(ctx, msg.protocolVersion()));
 
-            final Channel inboundChannel = ctx.channel();
-            final Bootstrap b = new Bootstrap()
-                    .group(inboundChannel.eventLoop())
-                    .channel(NioSocketChannel.class)
-                    .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 10000)
-                    .option(ChannelOption.SO_KEEPALIVE, true)
-                    .handler(new DirectClientHandler(promise));
+
+            final Bootstrap b = bootstrapFactory.createClientBootstrap()
+                    .handler(new ChannelInitializer<Channel>() {
+                        @Override
+                        protected void initChannel(Channel ch) {
+                            ch.pipeline().addLast(proxyHandler)
+                                    .addLast(new DirectClientHandler(promise));
+                        }
+                    });
+
 
             b.connect(hostSA).addListener(Https.createHttpsConnectListener(ctx, msg.protocolVersion()));
         }
@@ -75,13 +102,15 @@ public class HttpServerHandler extends SimpleChannelInboundHandler<FullHttpReque
             final Promise<Channel> promise = ctx.executor().newPromise();
             promise.addListener(Http.createHttpPromiseListener(ctx, msg.protocolVersion()));
 
-            final Channel inboundChannel = ctx.channel();
-            final Bootstrap b = new Bootstrap()
-                    .group(inboundChannel.eventLoop())
-                    .channel(NioSocketChannel.class)
-                    .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 10000)
-                    .option(ChannelOption.SO_KEEPALIVE, true)
-                    .handler(new DirectClientHandler(promise));
+
+            final Bootstrap b = bootstrapFactory.createClientBootstrap()
+                    .handler(new ChannelInitializer<Channel>() {
+                        @Override
+                        protected void initChannel(Channel ch) {
+                            ch.pipeline().addLast(proxyHandler)
+                                    .addLast(new DirectClientHandler(promise));
+                        }
+                    });
 
 
             // increase RefCnt to can read content in listener

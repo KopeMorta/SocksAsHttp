@@ -25,7 +25,7 @@ public class Main {
                         protected void initChannel(Channel ch) {
                             ch.pipeline().addLast(new HttpRequestDecoder())
                                     .addLast(new HttpObjectAggregator(MAX_CONTENT_LEN))
-                                    .addLast(new HttpServerHandler(MAX_CONTENT_LEN))
+                                    .addLast(new HttpServerHandler(null, null, MAX_CONTENT_LEN))
 //                                    .addLast(new ReadBodyTest())
                             ;
                         }
@@ -39,6 +39,8 @@ public class Main {
             bossGroup.shutdownGracefully();
             workerGroup.shutdownGracefully();
         }
+
+
     }
 
 
