@@ -40,6 +40,15 @@ public class BindController {
     }
 
 
+    /**
+     * Try bind bootstrap to any free address which were distributed when the object was created
+     * Only if in list not have any free port - throw exception
+     *
+     * @param serverBootstrap bootstrap to bind
+     * @return binded channel
+     * @throws CannotBindException throw exception only if in addressesToBind list
+     * not have any free address
+     */
     public Channel bindBootstrap(final ServerBootstrap serverBootstrap) throws CannotBindException {
         while (true) {
             final Optional<SocketAddressHolder> optHolder = getAdr();
@@ -59,12 +68,18 @@ public class BindController {
         }
     }
 
+    /**
+     * Release binded address to reuse it.
+     * If this address not contains in list - method do nothing
+     * @param socketAddress already binded address
+     */
     public void releaseBindAdr(final SocketAddress socketAddress) {
         for (SocketAddressHolder socketAddressHolder : addressesToBind) {
             if(socketAddressHolder.getBindAdr().equals(socketAddress))
                 socketAddressHolder.unlock();
         }
     }
+
 
     private Optional<SocketAddressHolder> getAdr() {
         return addressesToBind.stream().filter(SocketAddressHolder::isFree).findAny();

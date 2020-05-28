@@ -10,6 +10,10 @@ import java.util.List;
 @Builder
 @Getter
 public class Config {
+
+    @Builder.Default
+    int maxHttpContentLength = 1024 * 1024;
+
     @Builder.Default
     int bossThreads = 2;
 
