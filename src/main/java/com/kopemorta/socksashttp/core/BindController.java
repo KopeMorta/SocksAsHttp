@@ -9,6 +9,7 @@ import lombok.Value;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.net.BindException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.SocketAddress;
@@ -56,14 +57,27 @@ public class BindController {
                 throw new CannotBindException("Not have free address to bind.");
 
             final SocketAddressHolder holder = optHolder.get();
-            final ChannelFuture channelFuture = serverBootstrap.bind(holder.getBindAdr()).syncUninterruptibly();
-            if (channelFuture.isSuccess()) {
-                holder.lock();
-                LOGGER.debug("Bootstrap successful bind to {}", holder.getBindAdr());
-                return channelFuture.channel();
-            } else {
-                holder.tempLock();
-                LOGGER.debug("Bootstrap failed bind to {}", holder.getBindAdr());
+            try {
+                final ChannelFuture channelFuture = serverBootstrap.bind(holder.getBindAdr()).syncUninterruptibly();
+                if (channelFuture.isSuccess()) {
+                    holder.lock();
+                    LOGGER.debug("Bootstrap successful bind to {}", holder.getBindAdr());
+                    return channelFuture.channel();
+                } else {
+                    holder.tempLock();
+                    LOGGER.debug("Bootstrap failed bind to {}", holder.getBindAdr());
+                }
+            } catch (Exception e) {
+                /* idk wtf is this but it works.
+                * i think bind exception should be in failed channel future but no.
+                * seems need catch BindException in catch block, but it don't work,
+                * BECAUSE BindException is checked exception and bind() not throw it.
+                */
+                if(e instanceof BindException) {
+                    holder.tempLock();
+                    LOGGER.debug("Bootstrap failed bind to {}", holder.getBindAdr());
+                } else
+                    throw e;
             }
         }
     }

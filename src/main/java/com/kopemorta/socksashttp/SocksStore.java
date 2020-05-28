@@ -15,13 +15,14 @@ import lombok.AllArgsConstructor;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
+import java.io.Closeable;
 import java.net.SocketAddress;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 
-public class SocksStore {
+public class SocksStore implements Closeable {
 
     private static final Logger LOGGER = LogManager.getLogger();
 
@@ -80,6 +81,13 @@ public class SocksStore {
                         channel.close().addListener(getChannelCloseListener(channel.localAddress()))
                 );
     }
+
+
+    @Override
+    public void close() {
+        this.releaseAll();
+    }
+
 
     private ChannelFutureListener getChannelCloseListener(final SocketAddress socketAddress) {
         return future -> bindController.releaseBindAdr(socketAddress);
